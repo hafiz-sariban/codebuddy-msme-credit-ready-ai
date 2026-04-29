@@ -1,9 +1,12 @@
 /**
  * AI Credit Coach Engine
- * Rule-based NLU + generative responses for credit coaching
+ * Hybrid: AI API (primary) + Rule-based NLU (fallback)
  */
 
 import { analyzeGaps, generateActionPlan, scoreToBand } from './scoringEngine';
+import { sendChatRequest, isApiConfigured } from '../services/apiService';
+
+// ── Rule-based Fallback Engine ──
 
 // Intent classifier
 function classifyIntent(message) {
@@ -23,8 +26,8 @@ function classifyIntent(message) {
   return 'general';
 }
 
-// Response generator
-export function generateCoachResponse(message, assessmentData) {
+// Response generator (fallback when API unavailable)
+function generateRuleBasedResponse(message, assessmentData) {
   const intent = classifyIntent(message);
   const { scoreTotal, pillars, band } = assessmentData || {};
 
@@ -32,6 +35,7 @@ export function generateCoachResponse(message, assessmentData) {
     return {
       text: "Hi! I'm Aria, your AI Credit Coach 👋 Complete your credit assessment first, and I'll give you personalized insights to help you become bankable. Head to the Assessment tab to get started!",
       suggestions: ['Start my assessment', 'What is credit readiness?', 'How does scoring work?'],
+      source: 'rule',
     };
   }
 
@@ -45,6 +49,7 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text: `Hello! I'm Aria, your Credit Coach 😊 Your current credit score is **${scoreTotal}/100** — ${band.label}.\n\nI'm here to help you understand your score and create a clear path to bankability. What would you like to explore?`,
         suggestions: ['Why is my score this level?', 'What should I focus on?', 'How do I get a loan?'],
+        source: 'rule',
       };
 
     case 'explain_low_score': {
@@ -57,6 +62,7 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text,
         suggestions: [`How do I fix ${topGaps[0]?.item}?`, 'Show me my action plan', 'What is my best pillar?'],
+        source: 'rule',
       };
     }
 
@@ -76,11 +82,11 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text,
         suggestions: ['Show full action plan', 'How do I open a bank account?', 'What documents do lenders need?'],
+        source: 'rule',
       };
     }
 
     case 'improve_score': {
-      const topAction = actionPlan[0];
       let text = `Here are your **top 3 highest-impact actions** to improve your score:\n\n`;
       actionPlan.slice(0, 3).forEach((a, i) => {
         text += `**${i + 1}. ${a.task}**\n⏱ ${a.timeframe} | 📈 ${a.impact}\n💡 ${a.reason}\n\n`;
@@ -89,6 +95,7 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text,
         suggestions: ['Mark task 1 as started', 'Show my full plan', 'How long until I reach 75?'],
+        source: 'rule',
       };
     }
 
@@ -101,6 +108,7 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text,
         suggestions: ['Start with the first task', 'Which is most urgent?', 'How much can I improve?'],
+        source: 'rule',
       };
     }
 
@@ -116,6 +124,7 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text,
         suggestions: ['What banks work with small businesses?', 'Show my action plan', 'What documents do I need?'],
+        source: 'rule',
       };
     }
 
@@ -123,18 +132,21 @@ export function generateCoachResponse(message, assessmentData) {
       return {
         text: `Managing debt well is key to your credit score! Here's a framework:\n\n**Debt Snowball Strategy:**\n1. List all debts from smallest to largest\n2. Pay minimums on all, extra on the smallest\n3. When smallest is paid, roll that payment to the next\n\n**Debt-to-Revenue target:** Keep below 20% for the best credit score impact.\n\nYour current debt situation contributes to your **Financial Health** score of ${pillars.financial.score}/100.`,
         suggestions: ['How does debt affect my score?', 'Show financial tips', 'Create debt payoff plan'],
+        source: 'rule',
       };
 
     case 'digital_advice':
       return {
         text: `Building a digital presence is one of the **fastest wins** for your credit score!\n\n**3 Quick Wins (All Free):**\n1. **Google Business Profile** (30 mins) → +7 pts\n2. **Facebook Business Page** (1 hour) → +8 pts\n3. **Mobile Money Account** (1 day) → +20 pts\n\nYour **Alternative Data** score is currently ${pillars.alternative.score}/100. Digital presence improvements can push this to 70+ quickly!`,
         suggestions: ['How to create Google Business?', 'Which mobile money is best?', 'Show all digital tasks'],
+        source: 'rule',
       };
 
     case 'savings_advice':
       return {
         text: `An emergency fund is your **financial safety net** and a major credit signal! 🛡️\n\n**Goal:** 3 months of operating expenses\n\n**How to build it:**\n1. Calculate your monthly costs: $___\n2. Open a separate savings account\n3. Automate 10% of revenue into it each month\n4. Do not touch it for non-emergencies\n\n**Impact:** A 3-month buffer adds up to **+15 points** to your Financial Health score.`,
         suggestions: ['How much should I save?', 'Best savings accounts for businesses', 'Show financial action plan'],
+        source: 'rule',
       };
 
     case 'score_details':
@@ -144,26 +156,66 @@ export function generateCoachResponse(message, assessmentData) {
             `**${p.label}** — ${p.score}/100 (Weight: ${p.weight}%)\n${p.score >= 70 ? '✅ Strong' : p.score >= 40 ? '⚠️ Needs work' : '🔴 Critical gap'}`
           ).join('\n\n'),
         suggestions: ['Why is my financial score low?', 'How to improve operations?', 'Show action plan'],
+        source: 'rule',
       };
 
     case 'affirmation':
       return {
         text: `That's the spirit! 💪 Every step forward builds your creditworthiness. Stay consistent, and you'll reach Credit Ready status before you know it.\n\nCurrent progress: **${scoreTotal}/100** — ${100 - scoreTotal} points to maximum score!`,
         suggestions: ['What\'s my next task?', 'Show my progress', 'How close am I to a loan?'],
+        source: 'rule',
       };
 
     case 'registration_advice':
       return {
-        text: `Business registration is one of the **highest-impact actions** you can take! 📋\n\n**Why it matters:**\n• Unlocks **+25 points** to your Operational Stability score\n• Makes you eligible for formal loans\n• Enables you to open business bank accounts\n• Protects your personal assets\n\n**Steps to register:**\n1. Choose business structure (Sole Trader / Partnership / LLC)\n2. Visit your local business registration office\n3. Obtain a Business ID / Registration Number\n4. Get any required sector-specific licenses\n\nCost: Usually $50–$500 depending on your state/country`,
+        text: `Business registration is one of the **highest-impact actions** you can take! 📋\n\n**Why it matters:**\n• Unlocks **+25 points** to your Operational Stability score\n• Makes you eligible for formal loans\n• Enables you to open business bank accounts\n• Protects your personal assets\n\n**Steps to register:**\n1. Choose business structure (Sole Trader / Partnership / LLC)\n2. Visit your local business registration office\n3. Obtain a Business ID / Registration Number\n4. Get any sector-specific licenses\n\nCost: Usually $50–$500 depending on your state/country`,
         suggestions: ['What documents do I need?', 'Show registration checklist', 'Update my registration status'],
+        source: 'rule',
       };
 
     default:
       return {
         text: `I'm Aria, your Credit Coach! Here's a quick summary:\n\n📊 **Your Score: ${scoreTotal}/100** (${band.label})\n🎯 **Biggest opportunity:** ${worstPillar[1].label} (${worstPillar[1].score}/100)\n⚡ **Top priority:** ${actionPlan[0]?.task || 'Complete your assessment'}\n\nWhat would you like to explore in more depth?`,
         suggestions: ['Why is my score this level?', 'Show action plan', 'How to get a loan?'],
+        source: 'rule',
       };
   }
+}
+
+// ── Main Entry Point (Async with API-first, fallback to rules) ──
+
+/**
+ * Generate a coach response.
+ * Tries AI API first; falls back to rule-based engine.
+ *
+ * @param {string} message - User's chat message
+ * @param {object|null} assessmentData - User's current assessment data
+ * @param {function} [onStatus] - Optional status callback: (msg) => void
+ * @returns {Promise<{text: string, suggestions: string[], source: string}>}
+ */
+export async function generateCoachResponse(message, assessmentData, onStatus) {
+  // Try AI API first if configured
+  if (isApiConfigured()) {
+    try {
+      onStatus?.('contacting_ai');
+      const result = await sendChatRequest(message, assessmentData);
+      return { ...result, source: 'ai' };
+    } catch (err) {
+      console.warn('[Coach] API call failed, falling back to rules:', err.message);
+      // Fall through to rule-based below
+    }
+  }
+
+  // Rule-based fallback
+  onStatus?.('using_fallback');
+  // Small delay so UI shows the fallback status briefly
+  await new Promise(r => setTimeout(r, 300));
+  return generateRuleBasedResponse(message, assessmentData);
+}
+
+// Keep sync version available for non-chat usage
+export function generateCoachResponseSync(message, assessmentData) {
+  return generateRuleBasedResponse(message, assessmentData);
 }
 
 export const STARTER_PROMPTS = [

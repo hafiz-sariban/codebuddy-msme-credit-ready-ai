@@ -6,13 +6,15 @@ import Dashboard from './components/Dashboard.jsx';
 import CoachChat from './components/CoachChat.jsx';
 import ActionPlan from './components/ActionPlan.jsx';
 import ScoreCard from './components/ScoreCard.jsx';
-import { LayoutDashboard, Bot, ListChecks, Award, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Bot, ListChecks, Award, RefreshCw, Settings } from 'lucide-react';
+import ApiSettings from './components/ApiSettings.jsx';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'score', label: 'Score', icon: Award },
   { id: 'plan', label: 'Action Plan', icon: ListChecks },
   { id: 'coach', label: 'Coach', icon: Bot },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 export default function App() {
@@ -90,6 +92,7 @@ export default function App() {
             <CoachChat assessment={latest} />
           </div>
         )}
+        {tab === 'settings' && <ApiSettings />}
       </main>
 
       {/* Bottom Nav */}

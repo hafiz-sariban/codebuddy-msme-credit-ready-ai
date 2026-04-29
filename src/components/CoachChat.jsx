@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, RefreshCw } from 'lucide-react';
+import { Send, Bot, User, Sparkles, RefreshCw, Wifi, WifiOff, Cpu, Zap } from 'lucide-react';
 import { generateCoachResponse, STARTER_PROMPTS } from '../engine/coachEngine';
+import { isApiConfigured } from '../services/apiService';
 import { addChatMessage, getState } from '../data/store';
 
 function formatText(text) {
@@ -27,31 +28,57 @@ export default function CoachChat({ assessment }) {
   });
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [statusText, setStatusText] = useState('');
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const send = (text) => {
+  const send = async (text) => {
     const msg = text.trim();
-    if (!msg) return;
+    if (!msg || isTyping) return;
 
     const userMsg = { id: Date.now(), role: 'user', content: msg, timestamp: new Date().toISOString() };
     setMessages(prev => [...prev, userMsg]);
     addChatMessage('user', msg);
     setInput('');
     setIsTyping(true);
+    setStatusText('');
 
-    // Simulate thinking delay
-    const delay = 800 + Math.random() * 700;
-    setTimeout(() => {
-      const response = generateCoachResponse(msg, assessment);
-      const coachMsg = { id: Date.now() + 1, role: 'coach', content: response.text, suggestions: response.suggestions, timestamp: new Date().toISOString() };
+    try {
+      const response = await generateCoachResponse(msg, assessment, (status) => {
+        switch (status) {
+          case 'contacting_ai': setStatusText('Connecting to AI…'); break;
+          case 'using_fallback': setStatusText('Using offline coach…'); break;
+          default: setStatusText(''); break;
+        }
+      });
+
+      const coachMsg = {
+        id: Date.now() + 1,
+        role: 'coach',
+        content: response.text,
+        suggestions: response.suggestions,
+        source: response.source,
+        timestamp: new Date().toISOString(),
+      };
       setMessages(prev => [...prev, coachMsg]);
       addChatMessage('coach', response.text);
-      setIsTyping(false);
-    }, delay);
+    } catch (err) {
+      const errorMsg = {
+        id: Date.now() + 1,
+        role: 'coach',
+        content: `⚠️ **Something went wrong.** ${err.message === 'NO_CONFIG' ? 'No API key configured. Go to Settings to connect an AI provider.' : err.message}`,
+        suggestions: ['Configure API settings', 'Try again'],
+        source: 'error',
+        timestamp: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, errorMsg]);
+    }
+
+    setIsTyping(false);
+    setStatusText('');
   };
 
   const clearChat = () => {
@@ -73,8 +100,19 @@ export default function CoachChat({ assessment }) {
         <div className="flex-1">
           <h3 className="font-bold text-slate-800 text-sm">Aria — AI Credit Coach</h3>
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-            <span className="text-xs text-slate-400">Active • Personalised to your profile</span>
+            {isApiConfigured() ? (
+              <>
+                <Zap size={12} className="text-emerald-500" />
+                <span className="text-xs text-emerald-600 font-medium">AI Connected</span>
+              </>
+            ) : (
+              <>
+                <WifiOff size={12} className="text-slate-400" />
+                <span className="text-xs text-slate-400">Rule-based mode</span>
+              </>
+            )}
+            <span className="text-slate-300">|</span>
+            <span className="text-xs text-slate-400">Personalised to your profile</span>
           </div>
         </div>
         <button onClick={clearChat} className="text-slate-400 hover:text-slate-600 p-1.5">
@@ -86,17 +124,42 @@ export default function CoachChat({ assessment }) {
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.map(msg => (
           <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-            <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${msg.role === 'coach' ? 'bg-gradient-to-br from-teal-500 to-teal-600' : 'bg-slate-200'}`}>
-              {msg.role === 'coach' ? <Bot size={15} className="text-white" /> : <User size={15} className="text-slate-600" />}
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 ${
+              msg.role === 'coach'
+                ? msg.source === 'ai'
+                  ? 'bg-gradient-to-br from-purple-500 to-indigo-600'
+                  : 'bg-gradient-to-br from-teal-500 to-teal-600'
+                : 'bg-slate-200'
+            }`}>
+              {msg.role === 'coach' ? (
+                msg.source === 'ai' ? <Cpu size={15} className="text-white" /> : <Bot size={15} className="text-white" />
+              ) : (
+                <User size={15} className="text-slate-600" />
+              )}
             </div>
             <div className={`max-w-[78%] ${msg.role === 'user' ? 'items-end' : 'items-start'} flex flex-col gap-2`}>
               <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
                 msg.role === 'coach'
-                  ? 'bg-white shadow-sm border border-slate-100 text-slate-700 rounded-tl-sm'
+                  ? msg.source === 'ai'
+                    ? 'bg-white shadow-md border border-indigo-100 text-slate-700 rounded-tl-sm'
+                    : 'bg-white shadow-sm border border-slate-100 text-slate-700 rounded-tl-sm'
                   : 'bg-teal-600 text-white rounded-tr-sm'
               }`}
                 dangerouslySetInnerHTML={{ __html: formatText(msg.content) }}
               />
+              {/* Source badge for AI vs Rule-based */}
+              {msg.source === 'ai' && msg.role === 'coach' && (
+                <div className="flex items-center gap-1">
+                  <Cpu size={10} className="text-indigo-400" />
+                  <span className="text-[10px] text-indigo-400 font-medium uppercase tracking-wide">AI Powered</span>
+                </div>
+              )}
+              {msg.source === 'rule' && msg.role === 'coach' && (
+                <div className="flex items-center gap-1">
+                  <Bot size={10} className="text-teal-400" />
+                  <span className="text-[10px] text-teal-400 font-medium uppercase tracking-wide">Rule-based</span>
+                </div>
+              )}
               {msg.suggestions && msg.role === 'coach' && (
                 <div className="flex flex-wrap gap-1.5">
                   {msg.suggestions.map((s, i) => (
@@ -117,8 +180,14 @@ export default function CoachChat({ assessment }) {
               <Bot size={15} className="text-white" />
             </div>
             <div className="bg-white border border-slate-100 px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm">
-              <div className="flex gap-1 items-center h-4">
-                {[0,1,2].map(i => <span key={i} className="w-2 h-2 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />)}
+              <div className="flex items-center gap-2">
+                {[0,1,2].map(i =>
+                  <span key={i} className="w-2 h-2 bg-slate-300 rounded-full animate-bounce"
+                    style={{ animationDelay: `${i * 0.15}s` }} />
+                )}
+                {statusText && (
+                  <span className="text-xs text-slate-400 ml-1">{statusText}</span>
+                )}
               </div>
             </div>
           </div>
